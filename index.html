@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pickaxe Nailer</title>
+<style>
+html,body{margin:0;height:100%;background:#1b1209;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;font-family:"Trebuchet MS",system-ui,sans-serif}
+canvas{display:block;position:absolute;left:0;top:0;touch-action:none}
+.ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(24,12,2,.66);color:#fff;text-align:center;gap:16px}
+.ov.h{display:none}
+h1{margin:0;font-size:clamp(30px,7vw,64px);color:#ffd36b;text-shadow:0 4px 0 #6b3a10;letter-spacing:.02em}
+p{margin:0;font-size:clamp(14px,2.4vw,20px);max-width:min(560px,86%);line-height:1.5}
+button{font:700 clamp(18px,3vw,28px) "Trebuchet MS",system-ui,sans-serif;padding:.5em 1.8em;border:0;border-radius:999px;background:#ffb02e;color:#3a1c00;box-shadow:0 5px 0 #9a5a00;cursor:pointer}
+button:active{transform:translateY(3px);box-shadow:0 2px 0 #9a5a00}
+button:focus-visible{outline:3px solid #fff}
+#mute{position:absolute;right:10px;top:10px;font-size:20px;padding:.3em .7em;z-index:5}
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div class="ov" id="start"><h1>Pickaxe Nailer</h1><p id="desc"></p><button id="play"></button></div>
+<div class="ov h" id="clear"><h1 id="ct"></h1><p id="res"></p><button id="again"></button></div>
+<button id="mute" aria-label="Sound">🔊</button>
+<script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>
+<script>
+// ---------- Poki SDK (falls back to a stub when not on Poki / offline) ----------
+const P=window.PokiSDK||{init:()=>Promise.resolve(),gameLoadingFinished(){},gameplayStart(){},gameplayStop(){},commercialBreak:(cb)=>{cb&&cb();return Promise.resolve()},happyTime(){},setDebug(){}};
+let userMute=false,adMute=false;
+P.init().catch(()=>{}).then(()=>{try{P.gameLoadingFinished()}catch(e){}});
+
+// ---------- Text ----------
+const ja=/^ja/.test(navigator.language);
+const T=ja?{desc:'ハンマーをドラッグして、釘に振り下ろそう。勢いが強いほど深く刺さる。でも面を斜めに当てると釘が曲がってしまう！',play:'あそぶ',hint:'ハンマーをドラッグして振り下ろそう！',clear:'クリア！',again:'もう一回',nails:'釘',time:'タイム',hits:'打数',perfect:'パーフェクト！',bent:'曲がった！'}
+:{desc:'Drag the hammer and swing it down on the nails. The harder you hit, the deeper they go — but hit with a tilted face and the nail bends!',play:'Play',hint:'Drag the hammer, then swing it down!',clear:'Cleared!',again:'Play again',nails:'Nails',time:'Time',hits:'Swings',perfect:'PERFECT!',bent:'BENT!'};
+const $=id=>document.getElementById(id);
+Object.assign(T,ja?{desc:'ピッケルを掴んで振り、丸太の釘を打ち込もう。勢いが強いほど深く刺さる。判定は両端の黄色い先端の一点だけ。まっすぐ突き立てるのがコツ。斜めに当てると刺さりにくくなる！',hint:'ピッケルをドラッグして、釘に振り下ろそう！'}:{desc:'Grab the pickaxe and swing it to drive the nails into the log. Harder hits sink them deeper. Only the yellow pick tips count — hit squarely with one — a tilted hit sinks the nail less!',hint:'Drag the pickaxe, then swing it down on the nails!'});$('desc').textContent=T.desc;$('play').textContent=T.play;$('ct').textContent=T.clear;$('again').textContent=T.again;
+
+// ---------- Canvas ----------
+const W=854,H=480,GY=333,NS=3,LX=758,PX=W+800,PY=60,HX=862,HY=-250,Z=.5,VW=W/Z,VH=H/Z,VX0=-100,VY0=-560;
+const cv=$('c'),g=cv.getContext('2d');
+let sc=1,ox=0,oy=0,dpr=1;
+function fit(){dpr=devicePixelRatio||1;cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';sc=Math.min(cv.width/VW,cv.height/VH);ox=(cv.width-VW*sc)/2;oy=(cv.height-VH*sc)/2}
+addEventListener('resize',fit);fit();
+
+// ---------- Audio ----------
+let ac;const lastS={};
+function AC(){if(!ac){try{ac=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}}if(ac&&ac.state==='suspended')ac.resume();return ac}
+function snd(k,f,d,type,v,sl){const now=performance.now();if(userMute||adMute||now-(lastS[k]||0)<70)return;lastS[k]=now;const a=AC();if(!a)return;const o=a.createOscillator(),n=a.createGain(),t=a.currentTime;o.type=type;o.frequency.setValueAtTime(f,t);if(sl)o.frequency.exponentialRampToValueAtTime(sl,t+d);n.gain.setValueAtTime(v,t);n.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(n);n.connect(a.destination);o.start(t);o.stop(t+d)}
+$('mute').onclick=()=>{userMute=!userMute;$('mute').textContent=userMute?'🔇':'🔊'};
+
+// ---------- Game state ----------
+const S=3,VMIN=700,DK=30,DMAX=60*NS,M=1,I=22000*S*S,KA=1800000*S*S,KW=185000*S*S,GR=1500,DT=1/480,KP=45,KD=8,FMAX=7000;
+// local collision points: [x,y,radius]  (handle runs along local x, head faces are local ±y)
+// kind: 0 = handle/side, 1 = flat face (adze), 2 = pick tip
+const PTS=[];for(let x=-77*S;x<=387*S;x+=22)PTS.push([x,0,8*S,0]);
+for(let y=-60*S;y<=60*S;y+=30)PTS.push([-83*S,y,11*S,0]);
+PTS.push([-78*S,114*S,0,2],[-78*S,-114*S,0,2]);
+let hm,nails,parts,texts,shake,t,hits,hint,grab,frozen,state='menu';
+const mouse={x:0,y:0};
+function reset(){
+  hm={x:HX,y:HY,a:Math.atan2(PY-HY,PX-HX),vx:0,vy:0,w:0};frozen=true;
+  nails=[[518,84*NS]].map(a=>({x:a[0],h:a[1],bent:0,done:false}));
+  parts=[];texts=[];shake=0;t=0;hits=0;hint=true;grab=null;
+}
+reset();
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const wrapA=x=>((x+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+function wp(p){const c=Math.cos(hm.a),s=Math.sin(hm.a),rx=c*p[0]-s*p[1],ry=s*p[0]+c*p[1];return[hm.x+rx,hm.y+ry,rx,ry]}
+function surf(x,tp){if(tp)for(const n of nails)if(!n.done&&Math.abs(x-n.x)<11*NS)return[GY-n.h,n];return[x<=LX?GY:1e9,null]}
+function burst(x,y,n,col,sp){for(let i=0;i<n;i++){const a=-Math.PI*Math.random();parts.push({x,y,vx:Math.cos(a)*sp*Math.random(),vy:Math.sin(a)*sp*Math.random(),l:.5+Math.random()*.4,c:col})}}
+function say(x,y,s,c){texts.push({x,y,s,c,l:1})}
+
+function step(dt){
+  if(frozen)return;
+  hm.vy+=GR*dt;
+  if(grab){ // pull the grabbed point toward the cursor with a limited spring force
+    const c=Math.cos(hm.a),s=Math.sin(hm.a),rx=c*grab[0]-s*grab[1],ry=s*grab[0]+c*grab[1];
+    const vx=hm.vx-hm.w*ry,vy=hm.vy+hm.w*rx;
+    let fx=KP*(mouse.x-(hm.x+rx))-KD*vx,fy=KP*(mouse.y-(hm.y+ry))-KD*vy;
+    const f=Math.hypot(fx,fy);if(f>FMAX){fx*=FMAX/f;fy*=FMAX/f}
+    hm.vx+=fx/M*dt;hm.vy+=fy/M*dt;hm.w+=(rx*fy-ry*fx)/I*dt;
+  }
+  {const da=wrapA(Math.atan2(PY-hm.y,PX-hm.x)-hm.a);hm.w+=(KA*da-KW*hm.w)/I*dt} // handle is pulled to point at a far point on the right
+  hm.w*=1-1.2*dt;hm.vx*=1-.15*dt;hm.w=clamp(hm.w,-40,40);
+  hm.x+=hm.vx*dt;hm.y+=hm.vy*dt;hm.a+=hm.w*dt;
+  let maxPen=0;
+  for(const p of PTS){
+    const[X,Y,rx,ry]=wp(p),[sy,n]=surf(X,p[3]==2),pen=Y+p[2]-sy;
+    if(X<LX&&X>LX-30*NS&&Y>GY+10&&Y<GY+150*NS&&hm.vx<0){hm.x+=LX-X;hm.vx*=-.1;continue}
+    if(pen<=0||pen>60)continue;
+    maxPen=Math.max(maxPen,pen);
+    const vy=hm.vy+hm.w*rx;
+    if(vy<=0)continue;
+    const j=(1+(n?.1:.25))*vy/(1/M+rx*rx/I);
+    hm.vy-=j/M;hm.w-=rx*j/I;
+    const vt=hm.vx-hm.w*ry,jt=clamp(-vt/(1/M+ry*ry/I),-.6*j,.6*j);
+    hm.vx+=jt/M;hm.w-=ry*jt/I;
+    if(n&&vy>VMIN){
+      // flatness of the hitting surface: 1 = face parallel to the nail head
+      const tl=Math.abs(wrapA(hm.a-(p[1]<0?Math.PI:0))),fl=Math.cos(tl*1.6);
+      let eff=clamp((fl-.5)/.5,.12,1);
+      
+      
+      const d=Math.min(DMAX,DK*eff*NS*((vy-VMIN)/500)**2);
+      n.h-=d;hits++;hint=false;
+      if(eff>.9&&vy>1300)say(n.x,sy-40,T.perfect,'#ffe27a');
+      shake=Math.max(shake,Math.min(14,vy/130));
+      burst(n.x,sy,Math.min(14,4+vy/200|0),'#d9d9e0',Math.min(500,vy/3));
+      snd('n',1500+Math.min(1500,vy),.14,'triangle',.28,700);snd('nl',180,.1,'square',.18,60);
+      if(n.h<=4*NS){n.h=4*NS;n.done=true;snd('d',520,.25,'sine',.25,1040);if(nails.every(q=>q.done))win()}
+    }else if(!n&&vy>250){
+      shake=Math.max(shake,Math.min(8,vy/250));burst(X,GY,5,'#c98a4b',260);snd('g',120,.14,'sine',Math.min(.4,vy/1500),50);
+    }
+  }
+  hm.y-=maxPen;
+  if(hm.x<-200){hm.x=-200;hm.vx=Math.abs(hm.vx)*.3}
+  if(hm.x>W+900){hm.x=W+900;hm.vx=-Math.abs(hm.vx)*.3}
+  
+  if(hm.y>H+700){hm.x=HX;hm.y=HY;hm.a=Math.atan2(PY-HY,PX-HX);hm.vx=hm.vy=hm.w=0;frozen=true;grab=null}
+}
+
+// ---------- Flow ----------
+function win(){
+  state='clear';grab=null;
+  try{P.gameplayStop();P.happyTime(1)}catch(e){}
+  $('res').textContent=`${T.time}: ${t.toFixed(1)}s  /  ${T.hits}: ${hits}`;
+  $('clear').classList.remove('h');
+  [523,659,784,1047].forEach((f,i)=>setTimeout(()=>snd('w'+i,f,.3,'triangle',.25),i*120));
+}
+function begin(){reset();state='play';$('start').classList.add('h');$('clear').classList.add('h');try{P.gameplayStart()}catch(e){}}
+$('play').onclick=()=>{AC();begin()};
+$('again').onclick=()=>{
+  AC();$('clear').classList.add('h');
+  let p;try{p=P.commercialBreak(()=>{adMute=true})}catch(e){}
+  Promise.resolve(p).catch(()=>{}).then(()=>{adMute=false;begin()});
+};
+
+// ---------- Input ----------
+function pos(e){return{x:(e.clientX*dpr-ox)/sc+VX0,y:(e.clientY*dpr-oy)/sc+VY0}}
+cv.addEventListener('pointerdown',e=>{
+  const m=pos(e);mouse.x=m.x;mouse.y=m.y;
+  if(state!=='play')return;
+  const c=Math.cos(hm.a),s=Math.sin(hm.a),dx=m.x-hm.x,dy=m.y-hm.y,lx=c*dx+s*dy,ly=-s*dx+c*dy;
+  const gx=clamp(lx,-100*S,387*S),gy=gx<-60*S?clamp(ly,-114*S,114*S):clamp(ly,-8*S,8*S);
+  if(Math.hypot(lx-gx,ly-gy)<90){frozen=false;grab=[gx,gy];cv.setPointerCapture(e.pointerId)}
+});
+cv.addEventListener('pointermove',e=>{const m=pos(e);mouse.x=m.x;mouse.y=m.y});
+['pointerup','pointercancel'].forEach(ev=>cv.addEventListener(ev,()=>{grab=null}));
+addEventListener('keydown',e=>{if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault()});
+addEventListener('contextmenu',e=>e.preventDefault());
+
+// ---------- Drawing ----------
+function drawSky(){
+  const gr=g.createLinearGradient(0,0,0,H);gr.addColorStop(0,'#4aa3e8');gr.addColorStop(1,'#bfe6fb');
+  g.fillStyle=gr;g.fillRect(-4000,-4000,W+8000,H+8000);
+  g.fillStyle='rgba(255,255,255,.85)';
+  [[150,100,1],[400,55,.7],[650,120,1.2],[800,50,.8]].forEach(c=>{g.beginPath();[[0,0,50],[45,10,40],[-45,12,36],[10,-18,36]].forEach(b=>{const x=c[0]+b[0]*c[2],y=c[1]+b[1]*c[2],r=b[2]*c[2];g.moveTo(x+r,y);g.arc(x,y,r,0,7)});g.fill()});
+  const lg=g.createLinearGradient(0,GY,0,GY+150*NS);lg.addColorStop(0,'#d9a05a');lg.addColorStop(.5,'#b57a3a');lg.addColorStop(1,'#7a4c22');
+  g.fillStyle=lg;g.beginPath();g.roundRect?g.roundRect(-4000,GY,LX+4000,150*NS,[0,34*NS,34*NS,0]):g.rect(-4000,GY,LX+4000,150*NS);g.fill();
+  g.fillStyle='rgba(255,230,170,.4)';g.fillRect(-4000,GY,LX+4000-30*NS,4*NS);
+  g.strokeStyle='rgba(70,36,10,.35)';g.lineWidth=2*NS;
+  for(let k=0;k<6;k++){g.beginPath();for(let x=-60;x<=LX-24*NS;x+=20){const y=GY+(18+k*22)*NS+Math.sin(x*.012+k*2)*4*NS;x==-60?g.moveTo(x,y):g.lineTo(x,y)}g.stroke()}
+  g.fillStyle='rgba(70,36,10,.45)';[[150,GY+50*NS],[420,GY+85*NS]].forEach(k=>{g.beginPath();g.ellipse(k[0],k[1],16*NS,9*NS,0,0,7);g.fill()});
+}
+function drawNail(n){
+  const top=GY-n.h;g.save();
+  g.fillStyle='#9ea3ad';g.fillRect(n.x-2.5*NS,GY-n.h*.5,5*NS,n.h*.5);
+  g.translate(n.x,GY-n.h*.5);g.rotate(n.bent*.45);
+  g.fillRect(-2.5*NS,-(n.h*.5),5*NS,n.h*.5+1);
+  g.fillStyle='#d6dae2';g.fillRect(-11*NS,-(n.h*.5),22*NS,4.5*NS);
+  g.restore();
+}
+function drawHammer(){
+  g.save();g.translate(hm.x,hm.y);g.rotate(hm.a);g.scale(S,S);
+  g.fillStyle='#8a5526';g.fillRect(-84,-8,471,16);
+  g.fillStyle='#b97a3a';g.fillRect(-84,-8,471,5);
+  const ir=g.createLinearGradient(-78,0,-102,0);ir.addColorStop(0,'#c3cad6');ir.addColorStop(1,'#6c7685');
+  g.fillStyle=ir;g.strokeStyle='#323946';g.lineWidth=2;g.lineJoin='round';
+  g.beginPath();g.moveTo(-78,-114);g.quadraticCurveTo(-120,0,-78,114);g.quadraticCurveTo(-84,0,-78,-114);g.closePath();g.fill();g.stroke();
+  g.fillStyle='#ffe27a';[-114,114].forEach(y=>{g.beginPath();g.arc(-78,y,3,0,7);g.fill()});
+  g.restore();
+  if(grab){
+    const c=Math.cos(hm.a),s=Math.sin(hm.a),gx=hm.x+c*grab[0]-s*grab[1],gy=hm.y+s*grab[0]+c*grab[1];
+    g.strokeStyle='rgba(255,255,255,.9)';g.lineWidth=3;g.setLineDash([8,8]);g.beginPath();g.moveTo(gx,gy);g.lineTo(mouse.x,mouse.y);g.stroke();g.setLineDash([]);
+    g.fillStyle='#fff';g.beginPath();g.arc(gx,gy,6,0,7);g.fill();
+    g.strokeStyle='#ffb02e';g.lineWidth=3;g.beginPath();g.arc(mouse.x,mouse.y,12,0,7);g.stroke();
+  }
+}
+function text(s,x,y,size,col,al){g.font=`700 ${size}px "Trebuchet MS",system-ui,sans-serif`;g.textAlign=al||'left';g.lineWidth=5;g.strokeStyle='rgba(30,14,2,.85)';g.strokeText(s,x,y);g.fillStyle=col;g.fillText(s,x,y)}
+function render(){
+  g.setTransform(1,0,0,1,0,0);g.fillStyle='#1b1209';g.fillRect(0,0,cv.width,cv.height);
+  const shx=(Math.random()-.5)*shake*sc,shy=(Math.random()-.5)*shake*sc;g.setTransform(sc,0,0,sc,ox-VX0*sc+shx,oy-VY0*sc+shy);
+  g.save();
+  drawSky();nails.forEach(drawNail);drawHammer();
+  for(const p of parts){g.globalAlpha=Math.max(0,p.l*2);g.fillStyle=p.c;g.fillRect(p.x-2,p.y-2,4,4)}g.globalAlpha=1;
+  for(const q of texts){g.globalAlpha=Math.min(1,q.l*2);text(q.s,q.x,q.y-(1-q.l)*60,56,q.c,'center')}g.globalAlpha=1;
+  g.setTransform(sc/Z,0,0,sc/Z,ox+shx,oy+shy);
+  const left=nails.filter(n=>!n.done).length;
+  text(`${T.nails} ${nails.length-left}/${nails.length}`,24,90,30,'#fff');
+  text(`${T.time} ${t.toFixed(1)}s`,24,126,22,'#ffe0a8');
+  if((hint||frozen)&&state==='play')text(T.hint,W/2,150,34,'#fff','center');
+  g.restore();
+}
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(.033,(now-last)/1000);last=now;
+  if(state==='play'){if(!frozen)t+=dt;const n=Math.ceil(dt/DT);for(let i=0;i<n&&state==='play';i++)step(dt/n)}
+  for(const p of parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=900*dt;p.l-=dt}parts=parts.filter(p=>p.l>0);
+  for(const q of texts)q.l-=dt;texts=texts.filter(q=>q.l>0);
+  shake*=.88;
+  render();requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body></html>
