@@ -35,7 +35,7 @@ Object.assign(T,ja?{desc:'ピッケルを掴んで振り、丸太の釘を打ち
 
 // ---------- Canvas ----------
 const W=854,H=480,GY0=333,LD=900,NS=3,LX=758,PX=W+800,PY=-200,HX=862,HY=-250,Z=.5,VW=W/Z,VH=H/Z,VHN=1200,VX0=-100,VY0=-560;
-let GY=GY0,OY=0,CY=VY0; // GY: top of the current log, OY: vertical offset of the current level, CY: camera top (lags behind)
+let GY=GY0,OY=0,POY=0,CY=VY0; // POY: eased copy of OY that the handle's target point follows // GY: top of the current log, OY: vertical offset of the current level, CY: camera top (lags behind)
 const NW=11*NS; // nail head half-width (shared by drawing and hit detection)
 const NO='#2b2f3a',NL=3; // nail outline color / thickness
 const NH=8*NS; // nail hit-detection depth: only the head (top part) of the nail can be hit
@@ -81,15 +81,15 @@ const PTS=[];for(let x=-77*S;x<=387*S;x+=22)PTS.push([x,0,8*S,0]);
 for(let y=-60*S;y<=60*S;y+=30)PTS.push([-83*S,y,11*S,0]);
 PTS.push([-78*S,114*S,0,2],[-78*S,-114*S,0,2]);
 let hm,nails,parts,texts,shake,t,hits,hint,grab,frozen,state='menu';
-let hs=0,wsh=false,ts=1,zm=0;const trail=[[],[]]; // hs: hit-stop time left, wsh: whoosh already played for this swing, trail: recent positions of the two pick tips
+let hs=0,wsh=false,ts=1,zm=0,bt=0;const trail=[[],[]]; // hs: hit-stop time left, wsh: whoosh already played for this swing, trail: recent positions of the two pick tips
 let broke,debris,flash,wave,winT,landed,lt,lv,ptr;
 const BX=327,BR=24,BYO=274;let BY=GY+BYO; // bomb buried so the nail tip (GY+252 at max depth) just touches its top
 const mouse={x:0,y:0};
 function reset(){
   hm={x:HX,y:HY,a:Math.atan2(PY-HY,PX-HX),vx:0,vy:0,w:0};frozen=true;
-  GY=GY0;OY=0;CY=VY0;BY=GY+BYO;lv=0;landed=false;lt=0;ptr=null;
+  GY=GY0;OY=0;POY=0;CY=VY0;BY=GY+BYO;lv=0;landed=false;lt=0;ptr=null;
   nails=[mkNail(GY0,84*NS),mkNail(GY0+LD,70*NS)]; // current nail + the one already stuck in the log below
-  parts=[];texts=[];shake=0;t=0;hs=0;wsh=false;ts=1;zm=0;trail[0].length=trail[1].length=0;hits=0;hint=true;grab=null;
+  parts=[];texts=[];shake=0;t=0;hs=0;wsh=false;ts=1;zm=0;bt=0;trail[0].length=trail[1].length=0;hits=0;hint=true;grab=null;
   broke=false;debris=[];flash=0;wave=null;clearTimeout(winT);
 }
 function mkNail(gy,h){return{x:BX,gy,h,bent:0,done:false}}
@@ -101,9 +101,9 @@ function surf(x,tp,yb){ // yb: bottom of the contact point. A nail only collides
   const lg=x<=LX?(broke?GY+LD:GY):1e9;
   if(tp)for(const n of nails)if(!n.done&&!n.gone&&Math.abs(x-n.x)<NW){const top=n.gy-n.h;if(top<lg&&yb<=top+NH)return[top,n]} // nails of logs further down (top>=lg) never act as a surface
   return[lg,null]}
-function spawn(){hm.x=HX;hm.y=HY+OY;hm.a=Math.atan2(PY-HY,PX-HX);hm.vx=hm.vy=hm.w=0;frozen=true;grab=null}
+function spawn(){hm.x=HX;hm.y=HY+OY;hm.a=Math.atan2(PY-HY,PX-HX);hm.vx=hm.vy=hm.w=0;frozen=!grab} // a held pick stays held on restart
 function advance(){ // the hammer has landed on the log below: that log becomes the current one, and a new one is stuck in below it
-  GY+=LD;OY+=LD;BY=GY+BYO;broke=false;landed=false;lt=0;lv++;hint=false;
+  GY+=LD;OY+=LD;BY=GY+BYO;broke=false;landed=false;lt=0;bt=0;lv++;hint=false;
   nails=nails.filter(n=>!n.gone);nails.push(mkNail(GY+LD,70*NS));
 }
 function burst(x,y,n,col,sp){for(let i=0;i<n;i++){const a=-Math.PI*Math.random();parts.push({x,y,vx:Math.cos(a)*sp*Math.random(),vy:Math.sin(a)*sp*Math.random(),l:.5+Math.random()*.4,c:col})}}
@@ -119,7 +119,7 @@ function step(dt){
     const f=Math.hypot(fx,fy);if(f>FMAX){fx*=FMAX/f;fy*=FMAX/f}
     hm.vx+=fx/M*dt;hm.vy+=fy/M*dt;hm.w+=(rx*fy-ry*fx)/I*dt;
   }
-  {const da=wrapA(Math.atan2(PY+OY-hm.y,PX-hm.x)-hm.a);hm.w+=(KA*da-KW*hm.w)/I*dt} // handle is pulled to point at a far point on the right
+  {const da=wrapA(Math.atan2(PY+POY-hm.y,PX-hm.x)-hm.a);hm.w+=(KA*da-KW*hm.w)/I*dt} // handle is pulled to point at a far point on the right
   hm.w*=1-1.2*dt;hm.vx*=1-.15*dt;hm.w=clamp(hm.w,-40,40);
   hm.x+=hm.vx*dt;hm.y+=hm.vy*dt;hm.a+=hm.w*dt;
   let maxPen=0;
@@ -156,7 +156,7 @@ function step(dt){
   if(hm.x<-200){hm.x=-200;hm.vx=Math.abs(hm.vx)*.3}
   if(hm.x>W+900){hm.x=W+900;hm.vx=-Math.abs(hm.vx)*.3}
   
-  if(hm.y>GY+(broke?LD:0)+850){if(broke)advance();spawn()}
+  if(!broke&&hm.y>GY+850)spawn() // (only puts the pick back; it is not checked during the explosion sequence at all)
 }
 
 // ---------- Bomb ----------
@@ -175,7 +175,7 @@ function boomSnd(){ // casual-game style explosion: bright "pop", short punchy t
   [784,988,1175,1568,1976].forEach((f,i)=>tone('triangle',f,f,.05+i*.055,.16,.22)); // sparkle
 }
 function blast(n){
-  if(broke)return;broke=true;n.gone=true;grab=null;
+  if(broke)return;broke=true;bt=0;n.gone=true; // (a held pick stays held through the explosion)
   boomSnd();flash=1;shake=45;wave={t:0};
   const cols=['#d9a05a','#b57a3a','#8a5a2a','#7a4c22','#5a3718'];
   for(let x=-110;x<LX+30;x+=52)for(let y=GY;y<GY+150*NS;y+=52){
@@ -215,7 +215,7 @@ $('again').onclick=()=>{
 function pos(e){return{x:(e.clientX*dpr-ox)/sc+VX0,y:(e.clientY*dpr-oy)/sc+CY}}
 cv.addEventListener('pointerdown',e=>{
   ptr=e;const m=pos(e);mouse.x=m.x;mouse.y=m.y;
-  if(state!=='play'||broke)return; // can't grab the hammer while it is flying/falling after the explosion
+  if(state!=='play')return; // the hammer can be grabbed during the explosion too
   frozen=false;grab=[GP[0],GP[1]];cv.setPointerCapture(e.pointerId); // touching anywhere on the screen counts as holding the pickaxe (it is pulled towards the finger by its grip point)
 });
 cv.addEventListener('pointermove',e=>{ptr=e;const m=pos(e);mouse.x=m.x;mouse.y=m.y});
@@ -417,6 +417,7 @@ function loop(now){
     ts+=(target-ts)*(1-Math.exp(-40*dt));
     if(target<1&&zm<.03)zm+=(.03-zm)*(1-Math.exp(-15*dt));
     zm*=Math.exp(-8*dt);
+    POY+=(OY+(broke?LD:0)-POY)*(1-Math.exp(-4*dt)); // the point the handle aims at starts sliding to the next log the moment the explosion happens
   }
   if(state==='play'){if(!frozen&&hs<=0)t+=dt;const n=Math.ceil(dt/DT);for(let i=0;i<n&&state==='play'&&hs<=0;i++)step(dt*ts/n)}
   if(state==='play'&&hs<=0){ // trail of the two pick tips + whoosh sound on a fast downswing
@@ -427,9 +428,9 @@ function loop(now){
     }
   }
   { // camera: normally on the current log; after the explosion it follows the falling hammer, but lags behind
-    let tg=VY0+OY;if(broke)tg=clamp(hm.y-480,VY0+OY,VY0+OY+LD);
+    let tg=VY0+OY;if(broke&&bt>.35)tg=VY0+OY+LD; // after the explosion the camera heads for the next log on its own timing (the pick plays no part)
     CY+=(tg-CY)*(1-Math.exp(-4*dt));
-    if(state==='play'&&broke&&landed){lt+=dt;if(lt>.8)advance()}
+    if(state==='play'&&broke){bt+=dt;if(bt>1.6)advance()} // the next log comes up on a fixed timer after the explosion, whatever the pick is doing
   }
   for(const p of parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=900*dt;p.l-=dt}parts=parts.filter(p=>p.l>0);
   for(const d of debris){if(d.nail)continue;d.x+=d.vx*dt;d.y+=d.vy*dt;d.vy+=1300*dt;d.a+=d.w*dt;d.l-=dt;
