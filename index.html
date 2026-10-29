@@ -134,7 +134,7 @@ function step(dt){
     hm.vy-=j/M;hm.w-=rx*j/I;
     const vt=hm.vx-hm.w*ry,jt=clamp(-vt/(1/M+ry*ry/I),-.6*j,.6*j);
     hm.vx+=jt/M;hm.w-=ry*jt/I;
-    if(n&&n.gy===GY&&vy>VMIN&&!n.sk){
+    if(n&&n.gy===GY+(broke?LD:0)&&vy>VMIN&&!n.sk){ // the next log's nail can be driven in right after the explosion, without waiting
       // flatness of the hitting surface: 1 = face parallel to the nail head
       const tl=Math.abs(wrapA(hm.a-(p[1]<0?Math.PI:0))),fl=Math.cos(tl*1.6);
       let eff=clamp((fl-.5)/.5,.12,1);
@@ -440,7 +440,7 @@ function loop(now){
   if(wave){wave.t+=dt;if(wave.t>.8)wave=null}flash*=.9;
   for(const n of nails)if(n.sk){const k=n.sk;k.t+=dt;
     const u=clamp((k.t-.1)/.15,0,1),e=u*u*u;n.h=k.from+(k.to-k.from)*e;
-    if(u>=1){n.sk=null;n.h=4*NS;n.done=true;snd('d',520,.25,'sine',.25,1040);if(state==='play'&&!broke&&n.gy===GY)blast(n)}}
+    if(u>=1){n.sk=null;n.h=4*NS;n.done=true;snd('d',520,.25,'sine',.25,1040);if(state==='play'){if(!broke&&n.gy===GY)blast(n);else if(broke&&n.gy===GY+LD){advance();blast(n)}}}} // driven in during the explosion sequence: move on to that log at once and blow it
   for(const q of texts)q.l-=dt;texts=texts.filter(q=>q.l>0);
   shake*=.88;
   render();requestAnimationFrame(loop);
