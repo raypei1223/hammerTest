@@ -37,6 +37,8 @@ Object.assign(T,ja?{desc:'ピッケルを掴んで振り、丸太の釘を打ち
 const W=854,H=480,GY0=333,LD=900,NS=3,LX=758,PX=W+800,PY=-200,HX=862,HY=-250,Z=.5,VW=W/Z,VH=H/Z,VX0=-100,VY0=-560;
 let GY=GY0,OY=0,CY=VY0; // GY: top of the current log, OY: vertical offset of the current level, CY: camera top (lags behind)
 const NW=11*NS; // nail head half-width (shared by drawing and hit detection)
+const NO='#2b2f3a',NL=3; // nail outline color / thickness
+const NH=8*NS; // nail hit-detection depth: only the head (top part) of the nail can be hit
 const cv=$('c'),g=cv.getContext('2d');
 let sc=1,ox=0,oy=0,dpr=1;
 function fit(){dpr=devicePixelRatio||1;cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';sc=Math.min(cv.width/VW,cv.height/VH);ox=(cv.width-VW*sc)/2;oy=(cv.height-VH*sc)/2}
@@ -94,7 +96,10 @@ reset();
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const wrapA=x=>((x+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
 function wp(p){const c=Math.cos(hm.a),s=Math.sin(hm.a),rx=c*p[0]-s*p[1],ry=s*p[0]+c*p[1];return[hm.x+rx,hm.y+ry,rx,ry]}
-function surf(x,tp){if(tp)for(const n of nails)if(!n.done&&!n.gone&&Math.abs(x-n.x)<NW)return[n.gy-n.h,n];return[x<=LX?(broke?GY+LD:GY):1e9,null]}
+function surf(x,tp,yb){ // yb: bottom of the contact point. A nail only collides at its head (top NH px); everywhere else the log itself is the surface
+  const lg=x<=LX?(broke?GY+LD:GY):1e9;
+  if(tp)for(const n of nails)if(!n.done&&!n.gone&&Math.abs(x-n.x)<NW){const top=n.gy-n.h;if(top<lg&&yb<=top+NH)return[top,n]} // nails of logs further down (top>=lg) never act as a surface
+  return[lg,null]}
 function spawn(){hm.x=HX;hm.y=HY+OY;hm.a=Math.atan2(PY-HY,PX-HX);hm.vx=hm.vy=hm.w=0;frozen=true;grab=null}
 function advance(){ // the hammer has landed on the log below: that log becomes the current one, and a new one is stuck in below it
   GY+=LD;OY+=LD;BY=GY+BYO;broke=false;landed=false;lt=0;lv++;hint=false;
@@ -118,7 +123,7 @@ function step(dt){
   hm.x+=hm.vx*dt;hm.y+=hm.vy*dt;hm.a+=hm.w*dt;
   let maxPen=0;
   for(const p of PTS){
-    const[X,Y,rx,ry]=wp(p),[sy,n]=surf(X,p[3]==2),pen=Y+p[2]-sy;
+    const[X,Y,rx,ry]=wp(p),[sy,n]=surf(X,p[3]==2,Y+p[2]),pen=Y+p[2]-sy;
     if(!broke&&X<LX&&X>LX-30*NS&&Y>GY+10&&Y<GY+150*NS&&hm.vx<0){hm.x+=LX-X;hm.vx*=-.1;continue}
     if(pen<=0||pen>60)continue;
     maxPen=Math.max(maxPen,pen);
@@ -140,7 +145,7 @@ function step(dt){
       shake=Math.max(shake,Math.min(14,vy/130));
       burst(n.x,sy,Math.min(14,4+vy/200|0),'#d9d9e0',Math.min(500,vy/3));
       hitSnd(vy,1-n.h/(84*NS));
-      if(n.h<=4*NS){n.sk={t:0,from:n.h+d,to:4*NS,s:false};n.h=n.sk.from} // final blow: the nail pauses a beat, then slides home
+      if(n.h<=4*NS){n.sk={t:0,from:4*NS,to:4*NS,s:false};n.h=4*NS} // final blow: the nail goes in all the way at once (no slow slide); the short beat before the explosion is unchanged
     }else if(!n&&vy>250){
       shake=Math.max(shake,Math.min(8,vy/250));burst(X,sy,5,'#c98a4b',260);snd('g',120,.14,'sine',Math.min(.4,vy/1500),50);
     }
@@ -154,16 +159,19 @@ function step(dt){
 }
 
 // ---------- Bomb ----------
-function boomSnd(){
+function boomSnd(){ // casual-game style explosion: bright "pop", short punchy thump, a puff of noise and a little sparkle arpeggio (about half a second, no long rumble)
   if(userMute||adMute)return;const a=AC();if(!a)return;const t0=a.currentTime;
-  const len=a.sampleRate*1.4|0,buf=a.createBuffer(1,len,a.sampleRate),d=buf.getChannelData(0);
-  for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.2);
-  const ns=a.createBufferSource(),lp=a.createBiquadFilter(),ng=a.createGain();
-  ns.buffer=buf;lp.type='lowpass';lp.frequency.setValueAtTime(5000,t0);lp.frequency.exponentialRampToValueAtTime(200,t0+1.2);
-  ng.gain.setValueAtTime(1,t0);ng.gain.exponentialRampToValueAtTime(.001,t0+1.3);
-  ns.connect(lp);lp.connect(ng);ng.connect(a.destination);ns.start(t0);
-  const o=a.createOscillator(),og=a.createGain();o.type='sine';o.frequency.setValueAtTime(110,t0);o.frequency.exponentialRampToValueAtTime(28,t0+.9);
-  og.gain.setValueAtTime(.9,t0);og.gain.exponentialRampToValueAtTime(.001,t0+1);o.connect(og);og.connect(a.destination);o.start(t0);o.stop(t0+1.1);
+  const out=a.createGain(),cp=a.createDynamicsCompressor();out.gain.value=.85;out.connect(cp);cp.connect(a.destination);
+  const tone=(type,f0,f1,at,d,v)=>{const o=a.createOscillator(),g=a.createGain(),t=t0+at;o.type=type;o.frequency.setValueAtTime(f0,t);if(f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,t+d);
+    g.gain.setValueAtTime(.0001,t);g.gain.linearRampToValueAtTime(v,t+.006);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(out);o.start(t);o.stop(t+d+.02)};
+  tone('triangle',1100,160,0,.14,.9);   // the "pop"
+  tone('sine',240,60,0,.38,.85);        // short thump underneath
+  tone('square',520,130,0,.1,.18);      // a bit of bite
+  const len=a.sampleRate*.24|0,buf=a.createBuffer(1,len,a.sampleRate),d=buf.getChannelData(0);
+  for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2);
+  const ns=a.createBufferSource(),bp=a.createBiquadFilter(),ng=a.createGain();ns.buffer=buf;bp.type='bandpass';bp.frequency.value=2600;bp.Q.value=.7;ng.gain.value=.55;
+  ns.connect(bp);bp.connect(ng);ng.connect(out);ns.start(t0); // puff
+  [784,988,1175,1568,1976].forEach((f,i)=>tone('triangle',f,f,.05+i*.055,.16,.22)); // sparkle
 }
 function blast(n){
   if(broke)return;broke=true;n.gone=true;grab=null;
@@ -174,8 +182,10 @@ function blast(n){
     debris.push({x:cx,y:cy,vx:dx/dist*sp,vy:dy/dist*sp-450-Math.random()*400,a:Math.random()*6.28,w:(Math.random()-.5)*14,
       sw:22+Math.random()*34,sh:16+Math.random()*30,c:cols[Math.random()*cols.length|0],l:4});
   }
-  // the nail itself is blown away too
-  debris.push({x:n.x,y:GY+110,vx:60,vy:-900,a:0,w:9,sw:5*NS,sh:84*NS,c:'#9ea3ad',l:4});
+  // nails already lying on this log (from earlier blasts) are blown away with it
+  for(const d of debris)if(d.nail){const dx=d.x-BX,dy=d.y-BY,dist=Math.hypot(dx,dy)||1,sp=450+Math.random()*900;d.asleep=false;d.st=0;d.vx=dx/dist*sp;d.vy=dy/dist*sp-450-Math.random()*400;d.w=(Math.random()-.5)*14}
+  // the nail itself is blown away too: it keeps flying (no lifetime) and piles up on the log below, and is removed only when it falls away
+  debris.push({nail:true,x:n.x+(Math.random()-.5)*30,y:GY+110,vx:(Math.random()-.5)*600,vy:-700-Math.random()*500,a:(Math.random()-.5)*.6,w:(Math.random()-.5)*22,l:Infinity,asleep:false,st:0,ct:0}); // launch speed/spin vary every time (the simulation itself is deterministic)
   const fc=['#fff3b0','#ffd34d','#ff9a2e','#ff5a1f','#3a2a22'];
   for(let i=0;i<110;i++){const a=Math.random()*6.28,sp=Math.random()*1100;
     parts.push({x:BX,y:BY,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-200,l:.5+Math.random()*.9,c:fc[Math.random()*fc.length|0],s:6+Math.random()*16})}
@@ -205,9 +215,7 @@ function pos(e){return{x:(e.clientX*dpr-ox)/sc+VX0,y:(e.clientY*dpr-oy)/sc+CY}}
 cv.addEventListener('pointerdown',e=>{
   ptr=e;const m=pos(e);mouse.x=m.x;mouse.y=m.y;
   if(state!=='play'||broke)return; // can't grab the hammer while it is flying/falling after the explosion
-  const c=Math.cos(hm.a),s=Math.sin(hm.a),dx=m.x-hm.x,dy=m.y-hm.y,lx=c*dx+s*dy,ly=-s*dx+c*dy;
-  const gx=clamp(lx,-100*S,387*S),gy=gx<-60*S?clamp(ly,-114*S,114*S):clamp(ly,-8*S,8*S);
-  if(Math.hypot(lx-gx,ly-gy)<90){frozen=false;grab=[GP[0],GP[1]];cv.setPointerCapture(e.pointerId)}
+  frozen=false;grab=[GP[0],GP[1]];cv.setPointerCapture(e.pointerId); // touching anywhere on the screen counts as holding the pickaxe (it is pulled towards the finger by its grip point)
 });
 cv.addEventListener('pointermove',e=>{ptr=e;const m=pos(e);mouse.x=m.x;mouse.y=m.y});
 ['pointerup','pointercancel'].forEach(ev=>cv.addEventListener(ev,()=>{grab=null}));
@@ -248,17 +256,102 @@ function drawBomb(gy){
   g.fillStyle=`rgba(255,${60+bl*120|0},30,${.35+bl*.65*(.3+pr*.7)})`;g.beginPath();g.arc(BX+6,BY-BR-36,5+pr*4,0,7);g.fill();
   g.restore();
 }
-function drawNail(n){
-  const top=n.gy-n.h;g.save();
-  {const b=84*NS-n.h;if(b>0){ // buried part: same steel as the exposed shaft, darker with depth, inside a dark groove
-    g.fillStyle='rgba(50,25,8,.35)';g.fillRect(n.x-4.5*NS,n.gy,9*NS,b+2*NS);
-    const sg=g.createLinearGradient(0,n.gy,0,n.gy+b);sg.addColorStop(0,'#9ea3ad');sg.addColorStop(1,'#656b78');
-    g.fillStyle=sg;g.beginPath();g.moveTo(n.x-2.5*NS,n.gy);g.lineTo(n.x+2.5*NS,n.gy);g.lineTo(n.x+2.5*NS,n.gy+b);g.lineTo(n.x,n.gy+b+4*NS);g.lineTo(n.x-2.5*NS,n.gy+b);g.closePath();g.fill();
-  }}
-  g.fillStyle='#9ea3ad';g.fillRect(n.x-2.5*NS,n.gy-n.h*.5,5*NS,n.h*.5);
-  g.translate(n.x,n.gy-n.h*.5);g.rotate(n.bent*.45);
-  g.fillRect(-2.5*NS,-(n.h*.5),5*NS,n.h*.5+1);
-  g.fillStyle='#d6dae2';g.fillRect(-NW,-(n.h*.5),2*NW,4.5*NS);
+function drawNailAt(x,y,a){ // a loose nail, drawn like a stuck one (same colors/outline), head at local top
+  g.save();g.translate(x,y);g.rotate(a);g.translate(0,-NCY);
+  const L=NL2,t=-L/2,tb=L/2-4*NS;
+  g.fillStyle=NO;
+  g.fillRect(-2.5*NS-NL,t-NL,5*NS+2*NL,L-4*NS+NL);
+  g.beginPath();g.moveTo(-2.5*NS-NL,tb);g.lineTo(2.5*NS+NL,tb);g.lineTo(0,L/2+NL*1.5);g.closePath();g.fill();
+  g.fillRect(-NW-NL,t-NL,2*NW+2*NL,4.5*NS+2*NL);
+  g.fillStyle='#9ea3ad';g.fillRect(-2.5*NS,t,5*NS,L-4*NS);
+  g.beginPath();g.moveTo(-2.5*NS,tb);g.lineTo(2.5*NS,tb);g.lineTo(0,L/2);g.closePath();g.fill();
+  g.fillStyle='#d6dae2';g.fillRect(-NW,t,2*NW,4.5*NS);
+  g.restore();
+}
+// ---- loose nails: small rigid-body simulation (gravity, rotation, friction, collisions with the log, the stuck nails and each other)
+const NL2=88*NS,NSHW=2.5*NS,NHT=4.5*NS;
+const NCY=(2*NW*NHT*(-NL2/2+NHT/2))/(2*NSHW*NL2+2*NW*NHT); // centre of mass (geometry coords, y<0 = towards the heavy head)
+const NI=(()=>{const m1=2*NSHW*NL2,m2=2*NW*NHT,hy=-NL2/2+NHT/2;return(m1*((2*NSHW)**2+NL2**2)/12+m1*NCY*NCY+m2*((2*NW)**2+NHT**2)/12+m2*(hy-NCY)**2)/(m1+m2)})();
+const NPARTS=[[0,-NCY,NSHW,NL2/2],[0,-NL2/2+NHT/2-NCY,NW,NHT/2]]; // collision boxes in body coords (shaft, head): [cx,cy,halfW,halfH]
+const NPTS=(()=>{const a=[];for(let y=-NL2/2;y<=NL2/2+.1;y+=21){a.push([-NSHW,y-NCY],[NSHW,y-NCY],[0,y-NCY])}
+  for(const x of[-NW,-NW/2,NW/2,NW])for(const y of[-NL2/2,-NL2/2+NHT])a.push([x,y-NCY]);return a})(); // sample points on the outline
+const NWALL={vx:0,vy:0,w:0,im:0,ii:0}; // static body used for the invisible walls
+function nailVel(b,rx,ry){return[b.vx-b.w*ry,b.vy+b.w*rx]}
+function nailImp(A,B,rAx,rAy,rBx,rBy,nx,ny,mu){ // impulse between A and B (B may be static), normal n points from B to A; returns the normal impulse
+  let[ax,ay]=nailVel(A,rAx,rAy),[bx,by]=nailVel(B,rBx,rBy);
+  let vn=(ax-bx)*nx+(ay-by)*ny;if(vn>=0)return 0;
+  const rAn=rAx*ny-rAy*nx,rBn=rBx*ny-rBy*nx,dn=A.im+B.im+rAn*rAn*A.ii+rBn*rBn*B.ii;
+  const j=-(1+(vn<-150?.15:0))*vn/dn;
+  A.vx+=j*nx*A.im;A.vy+=j*ny*A.im;A.w+=(rAx*ny-rAy*nx)*j*A.ii;
+  B.vx-=j*nx*B.im;B.vy-=j*ny*B.im;B.w-=(rBx*ny-rBy*nx)*j*B.ii;
+  [ax,ay]=nailVel(A,rAx,rAy);[bx,by]=nailVel(B,rBx,rBy);
+  const tx=-ny,ty=nx,vt=(ax-bx)*tx+(ay-by)*ty,rAt=rAx*ty-rAy*tx,rBt=rBx*ty-rBy*tx,dt2=A.im+B.im+rAt*rAt*A.ii+rBt*rBt*B.ii;
+  const jt=Math.max(-mu*j,Math.min(mu*j,-vt/dt2));
+  A.vx+=jt*tx*A.im;A.vy+=jt*ty*A.im;A.w+=(rAx*ty-rAy*tx)*jt*A.ii;
+  B.vx-=jt*tx*B.im;B.vy-=jt*ty*B.im;B.w-=(rBx*ty-rBy*tx)*jt*B.ii;
+  return j}
+function nailVs(A,B){ // sample points of A against the boxes of B
+  let best=0,bnx=0,bny=0,hit=0,jmax=0;
+  for(const q of NPTS){
+    const px=A.x+A.c*q[0]-A.s*q[1],py=A.y+A.s*q[0]+A.c*q[1],dx=px-B.x,dy=py-B.y,lx=B.c*dx+B.s*dy,ly=-B.s*dx+B.c*dy;
+    for(const pt of B.parts){
+      const ex=lx-pt[0],ey=ly-pt[1],ax=Math.abs(ex),ay=Math.abs(ey);
+      if(ax<pt[2]&&ay<pt[3]){
+        const qx=pt[2]-ax,qy=pt[3]-ay;let nlx=0,nly=0,pen;
+        if(qx<qy){nlx=ex<0?-1:1;pen=qx}else{nly=ey<0?-1:1;pen=qy}
+        const nx=B.c*nlx-B.s*nly,ny=B.s*nlx+B.c*nly;
+        hit++;jmax=Math.max(jmax,nailImp(A,B,px-A.x,py-A.y,px-B.x,py-B.y,nx,ny,.6));
+        if(pen>best){best=pen;bnx=nx;bny=ny}
+        break}}}
+  if(hit){const k=Math.max(0,best-.5)*.6,t=A.im+B.im;if(t>0){A.x+=bnx*k*A.im/t;A.y+=bny*k*A.im/t;B.x-=bnx*k*B.im/t;B.y-=bny*k*B.im/t}}
+  return hit?jmax:-1}
+function physNails(dt){
+  const L=debris.filter(d=>d.nail);if(!L.length)return;
+  const gy=broke?GY+LD:GY,SUB=8,h=dt/SUB;
+  for(const d of L){d.parts=NPARTS;d.ct=0}
+  for(let k=0;k<SUB;k++){
+    for(const d of L){const im=d.asleep?0:1;d.im=im;d.ii=im/NI;if(d.asleep)continue;d.vy+=1300*h;d.x+=d.vx*h;d.y+=d.vy*h;d.a+=d.w*h}
+    for(const d of L){d.c=Math.cos(d.a);d.s=Math.sin(d.a)}
+    for(let it=0;it<3;it++){
+      for(const d of L){if(d.asleep)continue;
+        let pen=0;
+        for(const q of NPTS){
+          const px=d.x+d.c*q[0]-d.s*q[1],py=d.y+d.s*q[0]+d.c*q[1];
+          if(px>=VX0-2&&px<=LX+2&&py>gy){
+            const rx=px-d.x,ry=py-d.y;pen=Math.max(pen,py-gy);d.ct++;
+            const[,vy]=nailVel(d,rx,ry);
+            if(vy>0){const vn=-vy,rn=-rx,j=-(1+(vn<-150?.15:0))*vn/(1+rn*rn*d.ii);d.vy-=j;d.w+=-rx*j*d.ii;
+              const[vx2]=nailVel(d,rx,ry),rt=-ry,jt=Math.max(-.6*j,Math.min(.6*j,-vx2/(1+rt*rt*d.ii)));d.vx+=jt;d.w+=-ry*jt*d.ii}}}
+        if(pen>.5)d.y-=(pen-.5)*.8}
+      for(const d of L){if(d.asleep)continue; // invisible walls: screen left edge (VX0) .. right end of the log (LX), nails never leave this box
+        let pl=0,pr=0;
+        for(const q of NPTS){
+          const px=d.x+d.c*q[0]-d.s*q[1],py=d.y+d.s*q[0]+d.c*q[1];
+          if(px<VX0){pl=Math.max(pl,VX0-px);nailImp(d,NWALL,px-d.x,py-d.y,0,0,1,0,.2);d.ct++}
+          else if(px>LX){pr=Math.max(pr,px-LX);nailImp(d,NWALL,px-d.x,py-d.y,0,0,-1,0,.2);d.ct++}}
+        if(pl>.5)d.x+=(pl-.5)*.8;if(pr>.5)d.x-=(pr-.5)*.8}
+      // loose nails collide only with the log and the invisible walls (not with each other, not with the nails stuck in the log)
+    }
+  }
+  for(const d of L){if(d.asleep)continue;
+    if(d.ct&&d.vx*d.vx+d.vy*d.vy<225&&Math.abs(d.w)<.3){d.st+=dt;if(d.st>.5){d.asleep=true;d.vx=d.vy=d.w=0}}else d.st=0}
+}
+function drawNail(n){ // the stuck nail is ONE shape (same as a loose nail: head, shaft, tip); the log just has a hole around the buried part, and the buried part is shaded darker
+  g.save();
+  const hh=n.h*.5,y0=n.gy-hh,tb=n.gy+84*NS-n.h; // y0: pivot of the bend; tb: where the tip starts to taper
+  g.fillStyle='rgba(50,25,8,.35)';g.fillRect(n.x-4.5*NS,n.gy,9*NS,tb-n.gy+6*NS); // hole in the log (also covers the very tip of a nail that is only just resting in it)
+  const body=o=>{g.beginPath();g.moveTo(n.x-2.5*NS-o,y0);g.lineTo(n.x+2.5*NS+o,y0);g.lineTo(n.x+2.5*NS+o,tb);g.lineTo(n.x,tb+4*NS+o*1.5);g.lineTo(n.x-2.5*NS-o,tb);g.closePath();g.fill()}; // straight lower part (exposed + buried) down to the tip
+  g.fillStyle=NO;body(NL); // outline pass (drawn first, slightly larger, so the fills below sit inside it)
+  g.save();g.translate(n.x,y0);g.rotate(n.bent*.45);
+  g.fillRect(-2.5*NS-NL,-hh-NL,5*NS+2*NL,hh+1+NL);
+  g.fillRect(-NW-NL,-hh-NL,2*NW+2*NL,4.5*NS+2*NL);
+  g.restore();
+  g.fillStyle='#9ea3ad';body(0);
+  const sh=g.createLinearGradient(0,n.gy,0,tb+4*NS);sh.addColorStop(0,'rgba(20,25,40,0)');sh.addColorStop(1,'rgba(20,25,40,.4)');
+  g.fillStyle=sh;body(0); // darkness grows with depth below the log surface; fully transparent at the surface, so no seam
+  g.translate(n.x,y0);g.rotate(n.bent*.45);
+  g.fillStyle='#9ea3ad';g.fillRect(-2.5*NS,-hh,5*NS,hh+1);
+  g.fillStyle='#d6dae2';g.fillRect(-NW,-hh,2*NW,4.5*NS);
   g.restore();
 }
 function drawHammer(){
@@ -282,8 +375,8 @@ function render(){
   g.setTransform(1,0,0,1,0,0);g.fillStyle='#1b1209';g.fillRect(0,0,cv.width,cv.height);
   const shx=(Math.random()-.5)*shake*sc,shy=(Math.random()-.5)*shake*sc;g.setTransform(sc,0,0,sc,ox-VX0*sc+shx,oy-CY*sc+shy);
   g.save();
-  drawSky();if(!broke)drawBomb(GY);drawBomb(GY+LD);nails.forEach(n=>{if(!n.gone)drawNail(n)});drawHammer();
-  for(const d of debris){g.save();g.translate(d.x,d.y);g.rotate(d.a);g.fillStyle=d.c;g.strokeStyle='rgba(40,20,6,.6)';g.lineWidth=2;g.fillRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.strokeRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.restore()}
+  drawSky();if(!broke)drawBomb(GY);drawBomb(GY+LD);for(const d of debris)if(d.nail)drawNailAt(d.x,d.y,d.a); /* loose nails first, so the stuck nails are drawn on top of them */ nails.forEach(n=>{if(!n.gone)drawNail(n)});drawHammer();
+  for(const d of debris){if(d.nail)continue;g.save();g.translate(d.x,d.y);g.rotate(d.a);g.fillStyle=d.c;g.strokeStyle='rgba(40,20,6,.6)';g.lineWidth=2;g.fillRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.strokeRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.restore()}
   if(wave){g.globalAlpha=Math.max(0,1-wave.t/.6);g.strokeStyle='#fff1c0';g.lineWidth=24*(1-wave.t/.7);g.beginPath();g.arc(BX,BY,wave.t*2200,0,7);g.stroke();g.globalAlpha=1}
   for(const p of parts){g.globalAlpha=Math.max(0,p.l*2);g.fillStyle=p.c;const ps=p.s||4;g.fillRect(p.x-ps/2,p.y-ps/2,ps,ps)}g.globalAlpha=1;
   for(const q of texts){g.globalAlpha=Math.min(1,q.l*2);text(q.s,q.x,q.y-(1-q.l)*60,56,q.c,'center')}g.globalAlpha=1;
@@ -305,8 +398,9 @@ function loop(now){
     if(state==='play'&&broke&&landed){lt+=dt;if(lt>.8)advance()}
   }
   for(const p of parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=900*dt;p.l-=dt}parts=parts.filter(p=>p.l>0);
-  for(const d of debris){d.x+=d.vx*dt;d.y+=d.vy*dt;d.vy+=1300*dt;d.a+=d.w*dt;d.l-=dt;
+  for(const d of debris){if(d.nail)continue;d.x+=d.vx*dt;d.y+=d.vy*dt;d.vy+=1300*dt;d.a+=d.w*dt;d.l-=dt;
     if(broke&&d.vy>0&&d.x<=LX&&d.y>GY+LD&&d.y<GY+LD+200){burst(d.x,GY+LD,2,'#c98a4b',180);d.l=0}} // fragments and the old nail crash onto the log below
+  physNails(dt);
   debris=debris.filter(d=>d.l>0&&d.y<GY+LD+1500);
   if(wave){wave.t+=dt;if(wave.t>.8)wave=null}flash*=.9;
   for(const n of nails)if(n.sk){const k=n.sk;k.t+=dt;
