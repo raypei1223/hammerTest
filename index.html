@@ -34,14 +34,14 @@ const $=id=>document.getElementById(id);
 Object.assign(T,ja?{desc:'ピッケルを掴んで振り、丸太の釘を打ち込もう。勢いが強いほど深く刺さる。判定は両端の黄色い先端の一点だけ。まっすぐ突き立てるのがコツ。斜めに当てると刺さりにくくなる！',hint:'ピッケルをドラッグして、釘に振り下ろそう！'}:{desc:'Grab the pickaxe and swing it to drive the nails into the log. Harder hits sink them deeper. Only the yellow pick tips count — hit squarely with one — a tilted hit sinks the nail less!',hint:'Drag the pickaxe, then swing it down on the nails!'});$('desc').textContent=T.desc;$('play').textContent=T.play;$('ct').textContent=T.clear;$('again').textContent=T.again;
 
 // ---------- Canvas ----------
-const W=854,H=480,GY0=333,LD=900,NS=3,LX=758,PX=W+800,PY=-200,HX=862,HY=-250,Z=.5,VW=W/Z,VH=H/Z,VX0=-100,VY0=-560;
+const W=854,H=480,GY0=333,LD=900,NS=3,LX=758,PX=W+800,PY=-200,HX=862,HY=-250,Z=.5,VW=W/Z,VH=H/Z,VHN=1200,VX0=-100,VY0=-560;
 let GY=GY0,OY=0,CY=VY0; // GY: top of the current log, OY: vertical offset of the current level, CY: camera top (lags behind)
 const NW=11*NS; // nail head half-width (shared by drawing and hit detection)
 const NO='#2b2f3a',NL=3; // nail outline color / thickness
 const NH=8*NS; // nail hit-detection depth: only the head (top part) of the nail can be hit
 const cv=$('c'),g=cv.getContext('2d');
 let sc=1,ox=0,oy=0,dpr=1;
-function fit(){dpr=devicePixelRatio||1;cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';sc=Math.min(cv.width/VW,cv.height/VH);ox=(cv.width-VW*sc)/2;oy=(cv.height-VH*sc)/2}
+function fit(){dpr=devicePixelRatio||1;cv.width=innerWidth*dpr;cv.height=innerHeight*dpr;cv.style.width=innerWidth+'px';cv.style.height=innerHeight+'px';sc=Math.min(cv.width/VW,cv.height/VHN);ox=(cv.width-VW*sc)/2;oy=(cv.height-VHN*sc)/2}
 addEventListener('resize',fit);fit();
 
 // ---------- Audio ----------
@@ -73,14 +73,15 @@ function hitSnd(v,deep){
 $('mute').onclick=()=>{userMute=!userMute;$('mute').textContent=userMute?'🔇':'🔊'};
 
 // ---------- Game state ----------
-const S=3,VMIN=700,DK=1.2,M=1,I=22000*S*S,KA=3600000*S*S,KW=260000*S*S,GR=1500,DT=1/480,KP=90,KD=12,FMAX=14000;
-const GP=[-78*S,0]; // fixed grab point (local coords): on the handle, fairly close to the head (head is at x=-78*S)
+const S=3,VMIN=700,DK=1.2,M=1,I=22000*S*S,KA=3600000*S*S,KW=260000*S*S,GR=1500,DT=1/480,KP=120,KD=14,FMAX=18000;
+const GP=[-78*S,114*S]; // fixed grab point (local coords): the lower tip of the blade
 // local collision points: [x,y,radius]  (handle runs along local x, head faces are local ±y)
 // kind: 0 = handle/side, 1 = flat face (adze), 2 = pick tip
 const PTS=[];for(let x=-77*S;x<=387*S;x+=22)PTS.push([x,0,8*S,0]);
 for(let y=-60*S;y<=60*S;y+=30)PTS.push([-83*S,y,11*S,0]);
 PTS.push([-78*S,114*S,0,2],[-78*S,-114*S,0,2]);
 let hm,nails,parts,texts,shake,t,hits,hint,grab,frozen,state='menu';
+let hs=0,wsh=false,ts=1,zm=0;const trail=[[],[]]; // hs: hit-stop time left, wsh: whoosh already played for this swing, trail: recent positions of the two pick tips
 let broke,debris,flash,wave,winT,landed,lt,lv,ptr;
 const BX=327,BR=24,BYO=274;let BY=GY+BYO; // bomb buried so the nail tip (GY+252 at max depth) just touches its top
 const mouse={x:0,y:0};
@@ -88,7 +89,7 @@ function reset(){
   hm={x:HX,y:HY,a:Math.atan2(PY-HY,PX-HX),vx:0,vy:0,w:0};frozen=true;
   GY=GY0;OY=0;CY=VY0;BY=GY+BYO;lv=0;landed=false;lt=0;ptr=null;
   nails=[mkNail(GY0,84*NS),mkNail(GY0+LD,70*NS)]; // current nail + the one already stuck in the log below
-  parts=[];texts=[];shake=0;t=0;hits=0;hint=true;grab=null;
+  parts=[];texts=[];shake=0;t=0;hs=0;wsh=false;ts=1;zm=0;trail[0].length=trail[1].length=0;hits=0;hint=true;grab=null;
   broke=false;debris=[];flash=0;wave=null;clearTimeout(winT);
 }
 function mkNail(gy,h){return{x:BX,gy,h,bent:0,done:false}}
@@ -106,11 +107,11 @@ function advance(){ // the hammer has landed on the log below: that log becomes 
   nails=nails.filter(n=>!n.gone);nails.push(mkNail(GY+LD,70*NS));
 }
 function burst(x,y,n,col,sp){for(let i=0;i<n;i++){const a=-Math.PI*Math.random();parts.push({x,y,vx:Math.cos(a)*sp*Math.random(),vy:Math.sin(a)*sp*Math.random(),l:.5+Math.random()*.4,c:col})}}
-function say(x,y,s,c){texts.push({x,y,s,c,l:1})}
+function say(x,y,s,c,z){texts.push({x,y,s,c,z,l:1})}
 
 function step(dt){
   if(frozen)return;
-  hm.vy+=GR*dt;
+  hm.vy+=GR*(broke?2.2:1)*dt; // heavier gravity on the pick after the explosion
   if(grab){ // pull the grabbed point toward the cursor with a limited spring force
     const c=Math.cos(hm.a),s=Math.sin(hm.a),rx=c*grab[0]-s*grab[1],ry=s*grab[0]+c*grab[1];
     const vx=hm.vx-hm.w*ry,vy=hm.vy+hm.w*rx;
@@ -141,8 +142,8 @@ function step(dt){
       
       const d=DK*eff*NS*((vy-VMIN)/500)**2;
       n.h-=d;hits++;hint=false;
-      if(eff>.9&&vy>1300)say(n.x,sy-40,T.perfect,'#ffe27a');
-      shake=Math.max(shake,Math.min(14,vy/130));
+      if(eff>.9&&vy>1300){say(n.x,sy-60,T.perfect,'#ffe27a',96);hs=Math.max(hs,.13);shake=Math.max(shake,18);zm=Math.max(zm,.06);flash=Math.max(flash,.18);burst(n.x,sy,14,'#ffe27a',620)} // PERFECT: big hit-stop, zoom pop, flash and sparks
+      shake=Math.max(shake,Math.min(14,vy/130));hs=Math.max(hs,Math.min(.08,.03+(vy-VMIN)/9000)); // hit-stop: freeze the physics for a moment on a hard hit
       burst(n.x,sy,Math.min(14,4+vy/200|0),'#d9d9e0',Math.min(500,vy/3));
       hitSnd(vy,1-n.h/(84*NS));
       if(n.h<=4*NS){n.sk={t:0,from:4*NS,to:4*NS,s:false};n.h=4*NS} // final blow: the nail goes in all the way at once (no slow slide); the short beat before the explosion is unchanged
@@ -234,7 +235,7 @@ function drawLog(gy){
 function drawSky(){
   // sky is attached to the camera (gradient) with clouds scrolling slower than the world (parallax)
   const gr=g.createLinearGradient(0,CY+560,0,CY+560+H);gr.addColorStop(0,'#4aa3e8');gr.addColorStop(1,'#bfe6fb');
-  g.fillStyle=gr;g.fillRect(-4000,CY-100,W+8000,VH+200);
+  g.fillStyle=gr;g.fillRect(-4000,CY-1500,W+8000,VHN+3000);
   g.fillStyle='rgba(255,255,255,.85)';
   const par=(CY-VY0)*.7,per=1000;
   [[150,100,1],[400,55,.7],[650,120,1.2],[800,50,.8]].forEach(c=>{
@@ -354,6 +355,11 @@ function drawNail(n){ // the stuck nail is ONE shape (same as a loose nail: head
   g.fillStyle='#d6dae2';g.fillRect(-NW,-hh,2*NW,4.5*NS);
   g.restore();
 }
+function drawTrail(){ // faint streak behind the pick tips, only while moving fast
+  g.save();g.strokeStyle='#fff';g.lineCap='round';
+  for(const a of trail)for(let k=1;k<a.length;k++){const p=a[k-1],q=a[k],f=Math.min(1,(q.s-800)/900);if(f<=0)continue;g.globalAlpha=f*k/a.length*.55;g.lineWidth=4+10*k/a.length;g.beginPath();g.moveTo(p.x,p.y);g.lineTo(q.x,q.y);g.stroke()}
+  g.restore();
+}
 function drawHammer(){
   g.save();g.translate(hm.x,hm.y);g.rotate(hm.a);g.scale(S,S);
   g.fillStyle='#8a5526';g.fillRect(-84,-8,471,16);
@@ -373,13 +379,13 @@ function drawHammer(){
 function text(s,x,y,size,col,al){g.font=`700 ${size}px "Trebuchet MS",system-ui,sans-serif`;g.textAlign=al||'left';g.lineWidth=5;g.strokeStyle='rgba(30,14,2,.85)';g.strokeText(s,x,y);g.fillStyle=col;g.fillText(s,x,y)}
 function render(){
   g.setTransform(1,0,0,1,0,0);g.fillStyle='#1b1209';g.fillRect(0,0,cv.width,cv.height);
-  const shx=(Math.random()-.5)*shake*sc,shy=(Math.random()-.5)*shake*sc;g.setTransform(sc,0,0,sc,ox-VX0*sc+shx,oy-CY*sc+shy);
+  const shx=(Math.random()-.5)*shake*sc,shy=(Math.random()-.5)*shake*sc;{const zz=1+zm,cx=cv.width/2,cy=cv.height/2,e0=ox-VX0*sc+shx,f0=oy-CY*sc+shy;g.setTransform(sc*zz,0,0,sc*zz,cx+(e0-cx)*zz,cy+(f0-cy)*zz)}
   g.save();
-  drawSky();if(!broke)drawBomb(GY);drawBomb(GY+LD);for(const d of debris)if(d.nail)drawNailAt(d.x,d.y,d.a); /* loose nails first, so the stuck nails are drawn on top of them */ nails.forEach(n=>{if(!n.gone)drawNail(n)});drawHammer();
+  drawSky();if(!broke)drawBomb(GY);drawBomb(GY+LD);for(const d of debris)if(d.nail)drawNailAt(d.x,d.y,d.a); /* loose nails first, so the stuck nails are drawn on top of them */ nails.forEach(n=>{if(!n.gone)drawNail(n)});drawHammer();drawTrail();
   for(const d of debris){if(d.nail)continue;g.save();g.translate(d.x,d.y);g.rotate(d.a);g.fillStyle=d.c;g.strokeStyle='rgba(40,20,6,.6)';g.lineWidth=2;g.fillRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.strokeRect(-d.sw/2,-d.sh/2,d.sw,d.sh);g.restore()}
   if(wave){g.globalAlpha=Math.max(0,1-wave.t/.6);g.strokeStyle='#fff1c0';g.lineWidth=24*(1-wave.t/.7);g.beginPath();g.arc(BX,BY,wave.t*2200,0,7);g.stroke();g.globalAlpha=1}
   for(const p of parts){g.globalAlpha=Math.max(0,p.l*2);g.fillStyle=p.c;const ps=p.s||4;g.fillRect(p.x-ps/2,p.y-ps/2,ps,ps)}g.globalAlpha=1;
-  for(const q of texts){g.globalAlpha=Math.min(1,q.l*2);text(q.s,q.x,q.y-(1-q.l)*60,56,q.c,'center')}g.globalAlpha=1;
+  for(const q of texts){g.globalAlpha=Math.min(1,q.l*2);text(q.s,q.x,q.y-(1-q.l)*60,q.z||56,q.c,'center')}g.globalAlpha=1;
   g.setTransform(sc/Z,0,0,sc/Z,ox+shx,oy+shy);
   text(`${T.nails} ${lv}`,24,90,30,'#fff');
   text(`${T.time} ${t.toFixed(1)}s`,24,126,22,'#ffe0a8');
@@ -391,7 +397,35 @@ let last=performance.now();
 function loop(now){
   const dt=Math.min(.033,(now-last)/1000);last=now;
   if(ptr){const m=pos(ptr);mouse.x=m.x;mouse.y=m.y} // keep the cursor in world coords while the camera moves
-  if(state==='play'){if(!frozen)t+=dt;const n=Math.ceil(dt/DT);for(let i=0;i<n&&state==='play';i++)step(dt/n)}
+  if(hs>0)hs-=dt;
+  { // aim assist (nudges the tip towards the nail head and the face towards flat on a fast downswing) + slow-motion zone just before impact
+    let target=1;
+    if(state==='play'&&grab&&!broke&&!frozen&&hs<=0){
+      const nt=nails.find(n=>!n.done&&!n.gone&&!n.sk&&n.gy===GY);
+      if(nt){
+        const top=nt.gy-nt.h;let best=null;
+        for(const q of [[-78*S,114*S],[-78*S,-114*S]]){const[X,Y,rx]=wp([q[0],q[1],0,2]),vy=hm.vy+hm.w*rx,gap=top-Y;if(vy>600&&gap>0&&gap<300&&Math.abs(X-nt.x)<260&&(!best||vy>best.vy))best={X,vy,gap,up:q[1]>0}}
+        if(best){
+          const f=clamp((best.vy-600)/600,0,1);
+          hm.x+=clamp(nt.x-best.X,-150,150)*(1-Math.exp(-7*dt))*f;
+          const da=wrapA((best.up?0:Math.PI)-hm.a);
+          if(Math.abs(da)<.9)hm.a+=da*(1-Math.exp(-6*dt))*.7*f;
+          if(best.vy>900&&best.gap<220&&Math.abs(best.X-nt.x)<160)target=.4;
+        }
+      }
+    }
+    ts+=(target-ts)*(1-Math.exp(-40*dt));
+    if(target<1&&zm<.03)zm+=(.03-zm)*(1-Math.exp(-15*dt));
+    zm*=Math.exp(-8*dt);
+  }
+  if(state==='play'){if(!frozen&&hs<=0)t+=dt;const n=Math.ceil(dt/DT);for(let i=0;i<n&&state==='play'&&hs<=0;i++)step(dt*ts/n)}
+  if(state==='play'&&hs<=0){ // trail of the two pick tips + whoosh sound on a fast downswing
+    if(frozen){trail[0].length=trail[1].length=0}
+    else{let my=0;
+      [[-78*S,114*S],[-78*S,-114*S]].forEach((q,i)=>{const[X,Y,rx,ry]=wp([q[0],q[1],0,2]),vx=hm.vx-hm.w*ry,vy=hm.vy+hm.w*rx,a=trail[i];a.push({x:X,y:Y,s:Math.hypot(vx,vy)});if(a.length>12)a.shift();if(vy>my)my=vy});
+      if(grab&&my>1000&&!wsh){wsh=true;snd('w',500+my/3,.16,'triangle',Math.min(.12,.03+(my-1000)/20000),160)}else if(my<500)wsh=false;
+    }
+  }
   { // camera: normally on the current log; after the explosion it follows the falling hammer, but lags behind
     let tg=VY0+OY;if(broke)tg=clamp(hm.y-480,VY0+OY,VY0+OY+LD);
     CY+=(tg-CY)*(1-Math.exp(-4*dt));
